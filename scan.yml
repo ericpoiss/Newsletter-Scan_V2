@@ -1,0 +1,54 @@
+name: Newsletter Scan
+
+on:
+  schedule:
+    # Jeden Montag um 06:00 UTC (= 07:00 oder 08:00 MEZ/MESZ)
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}   # erlaubt manuellen Start ueber den "Run workflow"-Button
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Abhaengigkeiten installieren
+        run: pip install requests beautifulsoup4 pdfplumber
+
+      - name: Scan ausfuehren
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python scraper.py
+
+      - name: Pruefen ob es neue Themen gibt
+        id: check
+        run: |
+          if grep -q "Keine neuen Themen" report.md; then
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fertigen Claude-Prompt per E-Mail senden
+        if: steps.check.outputs.has_new == 'true'
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+        run: python send_digest.py
+
+      - name: State committen
+        run: |
+          git config user.name "newsletter-scanner-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || git commit -m "State-Update nach Scan"
+          git push
